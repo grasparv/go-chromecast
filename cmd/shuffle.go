@@ -20,6 +20,7 @@ import (
 	"math/rand"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/grasparv/go-chromecast/ui"
 	"github.com/sirupsen/logrus"
@@ -72,19 +73,21 @@ that ffmpeg is installed.`,
 			filesToPlay = append(filesToPlay, f.Name())
 		}
 
+		rand.Seed(time.Now().UnixNano())
+
 		rand.Shuffle(len(filesToPlay), func(i, j int) {
 			filesToPlay[i], filesToPlay[j] = filesToPlay[j], filesToPlay[i]
 		})
+
+		fmt.Println("Attemping to shuffle:")
+		for _, f := range filesToPlay {
+			fmt.Printf("- %s\n", f)
+		}
 
 		filenames := make([]string, len(filesToPlay))
 		for i, f := range filesToPlay {
 			filename := filepath.Join(directory, f)
 			filenames[i] = filename
-		}
-
-		fmt.Println("Attemping to play the following media:")
-		for _, f := range filenames {
-			fmt.Printf("- %s\n", f)
 		}
 
 		// Optionally run a UI when playing this media:
