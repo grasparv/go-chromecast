@@ -1,6 +1,6 @@
 # Chromecast
 
-Implements a basic number of the google chromecast commands. Other than the basic commands, it also allows you to play media files from your computer either individually or in a playlist; the `playlist` command will look at all the files in a folder and play them sorted by numerically.
+Implements a basic number of the google chromecast commands. Other than the basic commands, it also allows you to play media files from your computer either individually or in a playlist; the `playlist` command will look at all the files in a folder and play them sorted by numerically. The command `shuffle` will play the files in a directory in a random order.
 
 ## Media Content Playable
 
