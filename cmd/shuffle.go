@@ -30,10 +30,9 @@ import (
 // shuffleCmd represents the playlist command
 var shuffleCmd = &cobra.Command{
 	Use:   "shuffle <directory>",
-	Short: "Load and play media on the chromecast",
-	Long: `Load and play media files on the chromecast, this will
-start a streaming server locally and serve the media file to the
-chromecast.
+	Short: "Load and play media on the chromecast in random order",
+	Long: `Load and play media files on the chromecast order. This will start a
+	streaming server locally and serve the media file to the chromecast.
 
 If the media file is an unplayable media type by the chromecast, this
 will attempt to transcode the media file to mp4 using ffmpeg. This requires
