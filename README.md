@@ -32,12 +32,12 @@ device uuid, `-u <uuid>`, the results will be cached and it will connect to the 
 ## Installing
 
 ### Install binaries
-https://github.com/vishen/go-chromecast/releases
+https://github.com/grasparv/go-chromecast/releases
 
 ### Install the usual Go way:
 
 ```
-$ go get -u github.com/vishen/go-chromecast
+$ go get -u github.com/grasparv/go-chromecast
 ```
 
 ## Commands

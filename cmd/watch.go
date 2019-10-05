@@ -21,7 +21,7 @@ import (
 	"github.com/buger/jsonparser"
 	"github.com/spf13/cobra"
 
-	pb "github.com/vishen/go-chromecast/cast/proto"
+	pb "github.com/grasparv/go-chromecast/cast/proto"
 )
 
 // watchCmd represents the watch command

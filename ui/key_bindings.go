@@ -1,7 +1,7 @@
 package ui
 
 import (
-	"github.com/vishen/go-chromecast/application"
+	"github.com/grasparv/go-chromecast/application"
 
 	"github.com/jroimartin/gocui"
 	"github.com/sirupsen/logrus"

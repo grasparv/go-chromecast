@@ -17,7 +17,7 @@ package cmd
 import (
 	"fmt"
 
-	"github.com/vishen/go-chromecast/ui"
+	"github.com/grasparv/go-chromecast/ui"
 
 	"github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"

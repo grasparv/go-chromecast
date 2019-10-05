@@ -20,7 +20,7 @@ import (
 	"os"
 
 	"github.com/spf13/cobra"
-	"github.com/vishen/go-chromecast/tts"
+	"github.com/grasparv/go-chromecast/tts"
 )
 
 // ttsCmd represents the tts command

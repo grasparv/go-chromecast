@@ -14,7 +14,7 @@
 
 package main
 
-import "github.com/vishen/go-chromecast/cmd"
+import "github.com/grasparv/go-chromecast/cmd"
 
 func main() {
 	cmd.Execute()
