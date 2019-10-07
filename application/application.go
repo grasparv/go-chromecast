@@ -644,7 +644,7 @@ func (a *Application) loadAndServeFiles(filenames []string, contentType string, 
 			contentType: contentType,
 			transcode:   transcodeFile,
 		}
-		fmt.Printf("TRANSCODE_DEBUG: %#v\n", mediaItems[i])
+		//fmt.Printf("TRANSCODE_DEBUG: %#v\n", mediaItems[i])
 		// Add the filename to the list of filenames that go-chromecast will serve.
 		a.mediaFilenames = append(a.mediaFilenames, filename)
 	}

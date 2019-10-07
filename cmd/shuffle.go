@@ -20,8 +20,10 @@ import (
 	"math/rand"
 	"os"
 	"path/filepath"
+	"sort"
 	"time"
 
+	"github.com/grasparv/go-chromecast/picksongs"
 	"github.com/grasparv/go-chromecast/ui"
 	"github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
@@ -74,12 +76,22 @@ that ffmpeg is installed.`,
 
 		rand.Seed(time.Now().UnixNano())
 
-		rand.Shuffle(len(filesToPlay), func(i, j int) {
-			filesToPlay[i], filesToPlay[j] = filesToPlay[j], filesToPlay[i]
+		sort.Strings(filesToPlay)
+		queue, remaining := pick.Picksongs(filesToPlay)
+
+		rand.Shuffle(len(remaining), func(i, j int) {
+			remaining[i], remaining[j] = remaining[j], remaining[i]
 		})
 
-		fmt.Println("Attemping to shuffle:")
-		for _, f := range filesToPlay {
+		filesToPlay = append(queue, remaining...)
+
+		fmt.Println("Will queue this:")
+		for _, f := range queue {
+			fmt.Printf("- %s\n", f)
+		}
+
+		fmt.Println("Then this (shuffled):")
+		for _, f := range remaining {
 			fmt.Printf("- %s\n", f)
 		}
 
