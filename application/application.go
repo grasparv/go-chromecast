@@ -71,7 +71,12 @@ type Application struct {
 	// Current values from the chromecast.
 	application *cast.Application // It is possible that there is no current application, can happen for goole home.
 	media       *cast.Media
-	volume      *cast.Volume
+	// There seems to be two different volumes returned from the chromecast,
+	// one for the receiever and one for the playing media. It looks we update
+	// the receiever volume from go-chromecast so we should use that one. But
+	// we will keep the other one around in-case we need it at some point.
+	volumeMedia    *cast.Volume
+	volumeReceiver *cast.Volume
 
 	httpServer *http.Server
 	serverPort int
@@ -178,7 +183,7 @@ func (a *Application) recvMessages() {
 					}
 					a.application = &app
 				}
-				a.volume = &resp.Status.Volume
+				a.volumeReceiver = &resp.Status.Volume
 			}
 		}
 		// Relay the event to any user specified message funcs.
@@ -249,7 +254,7 @@ func (a *Application) Update() error {
 	for _, app := range recvStatus.Status.Applications {
 		a.application = &app
 	}
-	a.volume = &recvStatus.Status.Volume
+	a.volumeReceiver = &recvStatus.Status.Volume
 
 	if a.application == nil || a.application.IsIdleScreen {
 		return nil
@@ -270,7 +275,7 @@ func (a *Application) updateMediaStatus() error {
 	}
 	for _, media := range mediaStatus.Status {
 		a.media = &media
-		a.volume = &media.Volume
+		a.volumeMedia = &media.Volume
 	}
 	return nil
 }
@@ -281,7 +286,7 @@ func (a *Application) Close() {
 }
 
 func (a *Application) Status() (*cast.Application, *cast.Media, *cast.Volume) {
-	return a.application, a.media, a.volume
+	return a.application, a.media, a.volumeReceiver
 }
 
 func (a *Application) Pause() error {
@@ -467,9 +472,27 @@ func (a *Application) possibleContentType(filename string) (string, error) {
 	// mime.TypesByExtenstion(filepath.Ext(filename))
 	// fs.DetectContentType(data []byte) // needs opened(ish) file
 
+	// URL's can contain url parameters, and path.Ext doesn't
+	// handle it nicely (`.jpg?xxxx....` isn't the extension).
+	// Split the URL by ? and use the left side for extension.
+	if strings.Contains(filename, "://") && strings.Contains(filename, "?") {
+		parts := strings.Split(filename, "?")
+		filename = parts[0]
+	}
+
 	// https://developers.google.com/cast/docs/media
-	switch ext := path.Ext(filename); ext {
-	case ".mp4", ".m4a", ".m4p", ".MP4":
+	switch ext := strings.ToLower(path.Ext(filename)); ext {
+	case ".jpg", ".jpeg":
+		return "image/jpeg", nil
+	case ".gif":
+		return "image/gif", nil
+	case ".bmp":
+		return "image/bmp", nil
+	case ".png":
+		return "image/png", nil
+	case ".webp":
+		return "image/webp", nil
+	case ".mp4", ".m4a", ".m4p":
 		return "video/mp4", nil
 	case ".webm":
 		return "video/webm", nil
@@ -477,6 +500,10 @@ func (a *Application) possibleContentType(filename string) (string, error) {
 		return "audio/mp3", nil
 	case ".flac":
 		return "audio/flac", nil
+	case ".wav":
+		return "audio/wav", nil
+	case ".m3u8":
+		return "application/x-mpegURL", nil
 	default:
 		return "", fmt.Errorf("unknown file extension %q", ext)
 	}
@@ -493,9 +520,11 @@ func (a *Application) PlayedItems() map[string]PlayedItem {
 	return a.playedItems
 }
 
-func (a *Application) Load(filenameOrUrl, contentType string, transcode bool) error {
+func (a *Application) Load(filenameOrUrl, contentType string, transcode, detach bool) error {
 	var mi mediaItem
+	isExternalMedia := false
 	if strings.HasPrefix(filenameOrUrl, "http://") || strings.HasPrefix(filenameOrUrl, "https://") {
+		isExternalMedia = true
 		if contentType == "" {
 			var err error
 			contentType, err = a.possibleContentType(filenameOrUrl)
@@ -519,19 +548,16 @@ func (a *Application) Load(filenameOrUrl, contentType string, transcode bool) er
 		mi = mediaItems[0]
 	}
 
-	// If the current chromecast application isn't the Default Media Receiver
-	// we need to change it
-	if a.application == nil || a.application.AppId != defaultChromecastAppId {
-		_, err := a.sendAndWaitDefaultRecv(&cast.LaunchRequest{
-			PayloadHeader: cast.LaunchHeader,
-			AppId:         defaultChromecastAppId,
-		})
-		if err != nil {
-			return errors.Wrap(err, "unable to change to default media receiver")
-		}
-		// Update the 'application' and 'media' field on the 'CastApplication'
-		a.Update()
+	if !isExternalMedia && detach {
+		return fmt.Errorf("unable to detach from locally playing media content")
 	}
+
+	if err := a.ensureIsDefaultMediaReceiver(); err != nil {
+		return err
+	}
+
+	// NOTE: This isn't concurrent safe, but it doesn't need to be at the moment!
+	a.mediaFinished = make(chan bool, 1)
 
 	// Send the command to the chromecast
 	a.sendMediaRecv(&cast.LoadMediaCommand{
@@ -545,6 +571,12 @@ func (a *Application) Load(filenameOrUrl, contentType string, transcode bool) er
 		},
 	})
 
+	// If we should detach from waiting for media to finish playing
+	// and this is a url loaded external media, then we can exit early.
+	if detach && isExternalMedia {
+		return nil
+	}
+
 	// Wait until we have been notified that the media has finished playing
 	<-a.mediaFinished
 	return nil
@@ -557,21 +589,9 @@ func (a *Application) QueueLoad(filenames []string, contentType string, transcod
 		return errors.Wrap(err, "unable to load and serve files")
 	}
 
-	// If the current chromecast application isn't the Default Media Receiver
-	// we need to change it
-	if a.application == nil || a.application.AppId != defaultChromecastAppId {
-		_, err := a.sendAndWaitDefaultRecv(&cast.LaunchRequest{
-			PayloadHeader: cast.LaunchHeader,
-			AppId:         defaultChromecastAppId,
-		})
-
-		if err != nil {
-			return errors.Wrap(err, "unable to change to default media receiver")
-		}
+	if err := a.ensureIsDefaultMediaReceiver(); err != nil {
+		return err
 	}
-
-	// Update the 'application' and 'media' field on the 'CastApplication'
-	a.Update()
 
 	items := make([]cast.QueueLoadItem, len(mediaItems))
 	for i, mi := range mediaItems {
@@ -597,6 +617,95 @@ func (a *Application) QueueLoad(filenames []string, contentType string, transcod
 
 	// Wait until we have been notified that the media has finished playing
 	<-a.mediaFinished
+	return nil
+}
+
+func (a *Application) ensureIsDefaultMediaReceiver() error {
+	// If the current chromecast application isn't the Default Media Receiver
+	// we need to change it.
+	if a.application == nil || a.application.AppId != defaultChromecastAppId {
+		_, err := a.sendAndWaitDefaultRecv(&cast.LaunchRequest{
+			PayloadHeader: cast.LaunchHeader,
+			AppId:         defaultChromecastAppId,
+		})
+
+		if err != nil {
+			return errors.Wrap(err, "unable to change to default media receiver")
+		}
+		// Update the 'application' and 'media' field on the 'CastApplication'
+		return a.Update()
+	}
+	return nil
+}
+
+func (a *Application) Slideshow(filenames []string, duration int, repeat bool) error {
+	mediaItems, err := a.loadAndServeFiles(filenames, "", false)
+	if err != nil {
+		return errors.Wrap(err, "unable to load and serve files")
+	}
+
+	if err := a.ensureIsDefaultMediaReceiver(); err != nil {
+		return err
+	}
+
+	items := make([]cast.QueueLoadItem, len(mediaItems))
+	for i, mi := range mediaItems {
+		items[i] = cast.QueueLoadItem{
+			Autoplay:         true,
+			PlaybackDuration: duration,
+			Media: cast.MediaItem{
+				ContentId:   mi.contentURL,
+				StreamType:  "BUFFERED",
+				ContentType: mi.contentType,
+			},
+		}
+	}
+
+	var repeatMode string
+	if repeat {
+		repeatMode = "REPEAT_ALL"
+	} else {
+		repeatMode = "REPEAT_OFF"
+	}
+
+	// Send the command to the chromecast
+	a.sendMediaRecv(&cast.QueueLoad{
+		PayloadHeader: cast.QueueLoadHeader,
+		CurrentTime:   0,
+		StartIndex:    0,
+		RepeatMode:    repeatMode,
+		Items:         items,
+	})
+
+	// Timer for when to call the next image
+	t := time.NewTicker(time.Second * time.Duration(duration))
+	i := len(filenames)
+	for {
+		//  If we are not repeating, we need to stop after we have show the last image.
+		if !repeat {
+			if i == 0 {
+				break
+			}
+			i--
+		}
+		select {
+		case <-t.C:
+			if err := a.Update(); err != nil {
+				return err
+			}
+			// This is a hack because I can't work out how to
+			// get the chromecast to automatically change a photo
+			// in a slideshow. There is some documentation that
+			// implies it should be possible but I was not able to make it work.
+			// https://developers.google.com/cast/docs/reference/caf_receiver/cast.framework.messages.QueueItem.html#playbackDuration
+			if err := a.Next(); err != nil {
+				return err
+			}
+		// Media has finished playing
+		case <-a.mediaFinished:
+			return nil
+		}
+	}
 	return nil
 }
 
@@ -629,31 +738,31 @@ func (a *Application) loadAndServeFiles(filenames []string, contentType string, 
 
 		// If we have a content-type specified we should always
 		// attempt to use that
+		contentTypeToUse := contentType
 		if contentType != "" {
 		} else if knownFileType {
 			// If this is a media file we know the chromecast can play,
 			// then we don't need to transcode it.
-			contentType, _ = a.possibleContentType(filename)
+			contentTypeToUse, _ = a.possibleContentType(filename)
 			transcodeFile = false
 		} else if transcodeFile {
-			contentType = "video/mp4"
+			contentTypeToUse = "video/mp4"
 		}
 
 		mediaItems[i] = mediaItem{
 			filename:    filename,
-			contentType: contentType,
+			contentType: contentTypeToUse,
 			transcode:   transcodeFile,
 		}
-		//fmt.Printf("TRANSCODE_DEBUG: %#v\n", mediaItems[i])
 		// Add the filename to the list of filenames that go-chromecast will serve.
 		a.mediaFilenames = append(a.mediaFilenames, filename)
 	}
 
-	// TODO: maybe cache this somewhere
 	localIP, err := a.getLocalIP()
 	if err != nil {
 		return nil, err
 	}
+	a.log("local IP address: %s", localIP)
 
 	a.log("starting streaming server...")
 	// Start server to serve the media
@@ -676,33 +785,31 @@ func (a *Application) getLocalIP() (string, error) {
 		return a.localIP, nil
 	}
 
-	var addrs []net.Addr
+	// If we aren't looking for an address on a certain network
+	// interface, then we can use the local address of the connection.
 	if a.iface == "" {
 		var err error
-		addrs, err = net.InterfaceAddrs()
-		if err != nil {
-			return "", err
-		}
-	} else {
-		ifs, err := net.Interfaces()
-		if err != nil {
-			return "", err
-		}
+		a.localIP, err = a.conn.LocalAddr()
+		return a.localIP, errors.Wrap(err, "unable to get local addr from cast connection")
+	}
 
-		var foundIface net.Interface
-		for _, i := range ifs {
-			if i.Name == a.iface {
-				foundIface = i
-				break
-			}
+	ifs, err := net.Interfaces()
+	if err != nil {
+		return "", errors.Wrap(err, "unable to get network interfaces")
+	}
+	var foundIface net.Interface
+	for _, i := range ifs {
+		if i.Name == a.iface {
+			foundIface = i
+			break
 		}
-		if foundIface.Name == "" {
-			return "", fmt.Errorf("no network interface with name %q exists", a.iface)
-		}
-		addrs, err = foundIface.Addrs()
-		if err != nil {
-			return "", err
-		}
+	}
+	if foundIface.Name == "" {
+		return "", fmt.Errorf("no network interface with name %q exists", a.iface)
+	}
+	addrs, err := foundIface.Addrs()
+	if err != nil {
+		return "", err
 	}
 	for _, addr := range addrs {
 		if ipnet, ok := addr.(*net.IPNet); ok && !ipnet.IP.IsLoopback() {
@@ -731,7 +838,6 @@ func (a *Application) startStreamingServer() error {
 	a.serverPort = listener.Addr().(*net.TCPAddr).Port
 	a.log("found available port :%d", a.serverPort)
 
-	a.mediaFinished = make(chan bool, 1)
 	a.httpServer = &http.Server{}
 
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
@@ -788,8 +894,11 @@ func (a *Application) startStreamingServer() error {
 func (a *Application) serveLiveStreaming(w http.ResponseWriter, r *http.Request, filename string) {
 	cmd := exec.Command(
 		"ffmpeg",
+		"-re", // encode at 1x playback speed, to not burn the CPU
 		"-i", filename,
 		"-vcodec", "h264",
+		"-acodec", "aac",
+		"-ac", "2", // chromecasts don't support more than two audio channels
 		"-f", "mp4",
 		"-movflags", "frag_keyframe+faststart",
 		"-strict", "-experimental",
@@ -797,21 +906,18 @@ func (a *Application) serveLiveStreaming(w http.ResponseWriter, r *http.Request,
 	)
 
 	cmd.Stdout = w
+	if a.debug {
+		cmd.Stderr = os.Stderr
+	}
 
 	w.Header().Set("Access-Control-Allow-Origin", "*")
 	w.Header().Set("Transfer-Encoding", "chunked")
 
 	if err := cmd.Run(); err != nil {
-		if e, ok := err.(*exec.ExitError); ok {
-			log.WithField("package", "application").WithFields(logrus.Fields{
-				"filename": filename,
-				"stderr":   string(e.Stderr),
-			}).WithError(err).Error("error transcoding")
-		} else {
-			log.WithField("package", "application").WithField("filename", filename).WithError(err).Error("error transcoding")
-		}
+		log.WithField("package", "application").WithFields(logrus.Fields{
+			"filename": filename,
+		}).WithError(err).Error("error transcoding")
 	}
-
 }
 
 func (a *Application) log(message string, args ...interface{}) {

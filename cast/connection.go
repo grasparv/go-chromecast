@@ -43,13 +43,22 @@ func NewConnection(recvMsgChan chan *pb.CastMessage, debug bool) *Connection {
 
 func (c *Connection) Start(addr string, port int) error {
 	if !c.connected {
+		err := c.connect(addr, port)
+		if err != nil {
+			return err
+		}
 		defer func() { go c.receiveLoop() }()
-		return c.connect(addr, port)
+		return nil
 	}
 	return nil
 }
 
 func (c *Connection) SetDebug(debug bool) { c.debug = debug }
+
+func (c *Connection) LocalAddr() (addr string, err error) {
+	host, _, err := net.SplitHostPort(c.conn.LocalAddr().String())
+	return host, err
+}
 
 func (c *Connection) log(message string, args ...interface{}) {
 	if c.debug {
